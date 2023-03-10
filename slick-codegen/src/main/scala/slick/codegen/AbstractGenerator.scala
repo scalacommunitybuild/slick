@@ -377,7 +377,7 @@ abstract class AbstractGenerator[Code,TermName,TypeName](model: m.Model)
         val newdoc = doc +
           (if(scalaKeywords.contains(rawName)) s"\nNOTE: The name was escaped because it collided with a Scala keyword." else "")+
           (if(slickTableTermMembersNoArgs.contains(rawName)) s"\nNOTE: The name was disambiguated because it collided with Slick's method Table#$rawName." else "")
-        codegen.docWithCode(newdoc, code)
+        codegen.docWithCode(newdoc, this.code)
       }
       /** Name (escaped if colliding with Scala keyword). */
       final def name: TermName = termName{

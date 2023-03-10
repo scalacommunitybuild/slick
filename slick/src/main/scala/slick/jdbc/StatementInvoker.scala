@@ -50,7 +50,7 @@ abstract class StatementInvoker[+R] extends Invoker[R] { self =>
         var rowCount = 0
         val pr = new PositionedResult(rs) {
           def close() = {
-            rs.close()
+            this.rs.close()
             st.close()
             if(doLogResult) {
               StatementInvoker.tableDump(logHeader.toIndexedSeq.map(_.toIndexedSeq), logBuffer.toIndexedSeq.map(_.toIndexedSeq)).foreach(s => StatementInvoker.resultLogger.debug(s))
@@ -63,7 +63,7 @@ abstract class StatementInvoker[+R] extends Invoker[R] { self =>
           def extractValue(pr: PositionedResult) = {
             if(doLogResult) {
               if(logBuffer.length < StatementInvoker.maxLogResults)
-                logBuffer += 1.to(logHeader(0).length).map(idx => rs.getObject(idx) : Any).to(ArrayBuffer)
+                logBuffer += 1.to(logHeader(0).length).map(idx => this.rs.getObject(idx) : Any).to(ArrayBuffer)
               rowCount += 1
             }
             self.extractValue(pr)

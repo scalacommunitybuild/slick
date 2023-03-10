@@ -541,7 +541,7 @@ END;
       case ScalaBaseType.stringType =>
         new OptionResultConverter[String](ti.asInstanceOf[JdbcType[String]], idx) {
           override def read(pr: ResultSet) = {
-            val v = ti.getValue(pr, idx)
+            val v = this.ti.getValue(pr, this.idx)
             if ((v eq null) || v.isEmpty) None else Some(v)
           }
         }.asInstanceOf[ResultConverter[JdbcResultConverterDomain, Option[T]]]

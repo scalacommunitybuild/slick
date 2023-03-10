@@ -19,8 +19,8 @@ object SpecializedJdbcResultConverter {
     </#list>
     case _ => new BaseResultConverter[T](ti.asInstanceOf[JdbcType[T]], name, idx) {
       override def read(pr: ResultSet) = {
-        val v = ti.getValue(pr, idx)
-        if(v.asInstanceOf[AnyRef] eq null) throw new SlickException("Read NULL value ("+v+") for ResultSet column "+name)
+        val v = this.ti.getValue(pr, this.idx)
+        if(v.asInstanceOf[AnyRef] eq null) throw new SlickException("Read NULL value ("+v+") for ResultSet column "+this.name)
         v
       }
     }
@@ -33,7 +33,7 @@ object SpecializedJdbcResultConverter {
     </#list>
     case _ => new OptionResultConverter[T](ti.asInstanceOf[JdbcType[T]], idx) {
       override def read(pr: ResultSet) = {
-        val v = ti.getValue(pr, idx)
+        val v = this.ti.getValue(pr, this.idx)
         if(v.asInstanceOf[AnyRef] eq null) None else Some(v)
       }
     }

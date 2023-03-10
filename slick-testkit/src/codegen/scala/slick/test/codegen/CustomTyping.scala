@@ -14,7 +14,7 @@ object CustomTyping {
     def isTrue = false
   }
 
-  implicit val boolTypeMapper = MappedColumnType.base[Bool, Int](
+  implicit val boolTypeMapper: BaseColumnType[Bool] = MappedColumnType.base[Bool, Int](
     { b =>
       if (b == True) 1 else 0
     }, { i =>
