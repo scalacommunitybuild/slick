@@ -11,6 +11,10 @@ concurrency:
   group: "${{ github.workflow }}-${{ github.ref }}"
   cancel-in-progress: true
 
+env:
+  # language=json
+  JAVA_VERSIONS: '{ "javaMin": "11", "javaLatest": "23" }'
+
 jobs:
   build:
     name: Build and Test
@@ -18,7 +22,7 @@ jobs:
 
     strategy:
       matrix:
-        java: [ 11, 21 ]
+        java: [ javaMin, javaLatest ]
         scala: [ 2.12.x, 2.13.x, 3.x ]
 
     services:
@@ -41,7 +45,7 @@ jobs:
           - 49160:22
           - 49161:1521
       sqlserver:
-        image: mcr.microsoft.com/mssql/server:2022-latest
+        image: mcr.microsoft.com/mssql/server:2025-latest
         env:
           ACCEPT_EULA: Y
           MSSQL_SA_PASSWORD: Freeslick18
@@ -60,20 +64,18 @@ jobs:
           --privileged
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
       - name: Start MySQL
         run: docker run -d -e MYSQL_ALLOW_EMPTY_PASSWORD=yes -p 3306:3306 mysql --disable-log-bin
 
-      - uses: ts-graphviz/setup-graphviz@v2
-
       - name: Set up JDK
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: adopt
-          java-version: ${{ matrix.java }}
+          java-version: ${{ fromJson(env.JAVA_VERSIONS)[matrix.java] }}
           cache: sbt
 
       - name: Setup SBT
@@ -85,12 +87,13 @@ jobs:
         env:
           SLICK_TESTKIT_CONFIG: test-dbs/testkit.github-actions.conf
           TZ: Asia/Kamchatka
+          SLICK_SKIP_DIAGRAMS: "true"
 
       - name: Upload test results
         uses: actions/upload-artifact@v4
-        if: always()    # run this step even if previous step failed
+        if: always()    # run this step even if a previous step failed
         with:
-          name: test-results-java${{ matrix.java }}-scala${{ matrix.scala }}
+          name: test-results-${{ matrix.java }}-scala${{ matrix.scala }}
           path: '**/target/test-reports/TEST-*.xml'
 
   deploy_docs:
@@ -99,17 +102,17 @@ jobs:
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
       - uses: ts-graphviz/setup-graphviz@v2
 
       - name: Set up JDK
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: adopt
-          java-version: 11
+          java-version: ${{ fromJson(env.JAVA_VERSIONS)['javaMin'] }}
           cache: sbt
 
       - name: Setup SBT
@@ -135,17 +138,17 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
       - uses: ts-graphviz/setup-graphviz@v2
 
       - name: Set up JDK
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: adopt
-          java-version: 11
+          java-version: ${{ fromJson(env.JAVA_VERSIONS)['javaMin'] }}
           cache: sbt
 
       - name: Setup SBT

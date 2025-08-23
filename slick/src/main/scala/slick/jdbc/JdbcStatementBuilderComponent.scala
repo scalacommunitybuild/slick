@@ -26,7 +26,7 @@ trait JdbcStatementBuilderComponent { self: JdbcProfile =>
   def createUpdateInsertBuilder(node: Insert): InsertBuilder = new UpdateInsertBuilder(node)
   def createTableDDLBuilder(table: Table[?]): TableDDLBuilder = new TableDDLBuilder(table)
   def createColumnDDLBuilder(column: FieldSymbol, table: Table[?]): ColumnDDLBuilder = new ColumnDDLBuilder(column)
-  def createSequenceDDLBuilder(seq: Sequence[?]): SequenceDDLBuilder = new SequenceDDLBuilder(seq)
+  def createSequenceDDLBuilder(seq: Sequence[?]): SequenceDDLBuilder = new SequenceDDLBuilder.BuiltInSupport(seq)
 
   class JdbcCompiledInsert(source: Node) {
     class Artifacts(val compiled: Node,
@@ -173,7 +173,7 @@ trait JdbcStatementBuilderComponent { self: JdbcProfile =>
       buildHavingClause(c.having)
       buildOrderByClause(c.orderBy)
       if(!limit0) buildFetchOffsetClause(c.fetch, c.offset)
-      buildForUpdateClause(c.forUpdate)
+      buildLockingClause(c.locking)
       currentUniqueFrom = oldUniqueFrom
     }
 
@@ -276,10 +276,8 @@ trait JdbcStatementBuilderComponent { self: JdbcProfile =>
       }
     }
 
-    protected def buildForUpdateClause(forUpdate: Boolean) = building(OtherPart) {
-      if(forUpdate) {
-        b"\nfor update "
-      }
+    protected def buildLockingClause(strength: Option[LockStrength]) = building(OtherPart) {
+      strength.foreach(strength => b"\n${strength.sqlName}")
     }
 
     protected def buildSelectPart(n: Node): Unit = n match {
@@ -487,7 +485,7 @@ trait JdbcStatementBuilderComponent { self: JdbcProfile =>
 
     def buildUpdate(): SQLBuilder.Result = {
       val (gen, from, where, select) = tree match {
-        case Comprehension(sym, from: TableNode, Pure(select, _), where, None, _, None, None, None, None, false) =>
+        case Comprehension(sym, from: TableNode, Pure(select, _), where, None, _, None, None, None, None, None) =>
           select match {
             case f @ Select(Ref(struct), _) if struct == sym                                         =>
               (sym, from, where, ConstArray(f.field))
@@ -527,9 +525,9 @@ trait JdbcStatementBuilderComponent { self: JdbcProfile =>
       def fail(msg: String) =
         throw new SlickException("Invalid query for DELETE statement: " + msg)
       val (gen, from, where) = tree match {
-        case Comprehension(sym, from, Pure(_, _), where, _, _, None, distinct, fetch, offset, forUpdate) =>
-          if(fetch.isDefined || offset.isDefined || distinct.isDefined || forUpdate)
-            fail(".take, .drop .forUpdate and .distinct are not supported for deleting")
+        case Comprehension(sym, from, Pure(_, _), where, _, _, None, distinct, fetch, offset, locking) =>
+          if(fetch.isDefined || offset.isDefined || distinct.isDefined || locking.isDefined)
+            fail(".take, .drop, .forUpdate, .forShare, and .distinct are not supported for deleting")
           from match {
             case from: TableNode => (sym, from, where)
             case from => fail("A single source table is required, found: "+from)
@@ -772,6 +770,12 @@ trait JdbcStatementBuilderComponent { self: JdbcProfile =>
     protected def addIndexColumnList(columns: IndexedSeq[Node], sb: StringBuilder, requiredTableName: String) =
       addColumnList(columns, sb, requiredTableName, "index")
 
+    protected def addIndexColumnList(columns: IndexedSeq[Node], requiredTableName: String) = {
+      val sb = new StringBuilder
+      addColumnList(columns, sb, requiredTableName, "index")
+      sb.toString
+    }
+
     protected def addForeignKeyColumnList(columns: IndexedSeq[Node], sb: StringBuilder, requiredTableName: String) =
       addColumnList(columns, sb, requiredTableName, "foreign key constraint")
 
@@ -792,6 +796,17 @@ trait JdbcStatementBuilderComponent { self: JdbcProfile =>
             throw new SlickException("All columns in "+typeInfo+" must belong to table "+requiredTableName)
         case _ => throw new SlickException("Cannot use column "+c+" in "+typeInfo+" (only named columns are allowed)")
       }
+    }
+  }
+  object TableDDLBuilder {
+    trait UniqueIndexAsConstraint extends TableDDLBuilder {
+      override protected def createIndex(idx: Index) =
+        if (idx.unique)
+          s"""ALTER TABLE ${quoteIdentifier(table.tableName)}
+             |ADD CONSTRAINT ${quoteIdentifier(idx.name)}
+             |UNIQUE(${addIndexColumnList(idx.on, idx.table.tableName)})""".stripMargin
+        else
+          super.createIndex(idx)
     }
   }
 
@@ -848,15 +863,52 @@ trait JdbcStatementBuilderComponent { self: JdbcProfile =>
   }
 
   /** Builder for DDL statements for sequences. */
-  class SequenceDDLBuilder(seq: Sequence[?]) {
-    def buildDDL: DDL = {
-      val b = new StringBuilder append "create sequence " append quoteIdentifier(seq.name)
-      seq._increment.foreach { b append " increment " append _ }
-      seq._minValue.foreach { b append " minvalue " append _ }
-      seq._maxValue.foreach { b append " maxvalue " append _ }
-      seq._start.foreach { b append " start " append _ }
-      if(seq._cycle) b append " cycle"
-      DDL(b.toString, "drop sequence " + quoteIdentifier(seq.name))
+  trait SequenceDDLBuilder {
+    def buildDDL: DDL
+  }
+  object SequenceDDLBuilder {
+    class BuiltInSupport(seq: Sequence[?]) extends SequenceDDLBuilder {
+      protected def asClause = ""
+
+      protected def incrementClause(increment: Any): String = s"increment $increment"
+
+      protected def actualStart(start: Option[Any]): Option[Any] = start
+
+      protected def startClause(start: Any): String = s" start $start"
+
+      protected def cycleClause = "cycle"
+
+      def buildDDL: DDL = {
+        val createSql =
+          "create sequence " +
+            quoteIdentifier(seq.name) +
+            asClause +
+            seq._increment.fold("")(v => s" ${incrementClause(v)}") +
+            seq._minValue.fold("")(v => s" minvalue $v") +
+            seq._maxValue.fold("")(v => s" maxvalue $v") +
+            actualStart(seq._start).fold("")(startClause) +
+            (if (seq._cycle) s" $cycleClause" else "")
+
+        val dropSql =
+          s"drop sequence ${quoteIdentifier(seq.name)}"
+
+        DDL(createSql, dropSql)
+      }
+    }
+    object BuiltInSupport {
+      class OverrideActualStart[T](seq: Sequence[T]) extends BuiltInSupport(seq) {
+        override protected def actualStart(start: Option[Any]): Option[Any] =
+          start.orElse {
+            import seq.integral.*
+            Some(if (seq._increment.exists(_ < zero)) -1 else 1)
+          }
+      }
+      trait IncrementBy extends BuiltInSupport {
+        override protected def incrementClause(increment: Any): String = s"increment by $increment"
+      }
+      trait StartWith extends BuiltInSupport {
+        override protected def startClause(start: Any): String = s" start with $start"
+      }
     }
   }
 }

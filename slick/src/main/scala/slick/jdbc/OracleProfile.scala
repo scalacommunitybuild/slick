@@ -50,6 +50,8 @@ import slick.util.QueryInterpolator.queryInterpolator
   *   <li>[[slick.jdbc.JdbcCapabilities.insertMultipleRowsWithSingleStatement]]:
   *      Oracle doesn't support this feature directly.
   *      There are several alternative ways, but the library doesn't support them, so far.</li>
+  *   <li>[[slick.jdbc.JdbcCapabilities.forShare]]:
+  *     Oracle does not support SELECT ... FOR SHARE.</li>
   * </ul>
   *
   * Note: The Oracle JDBC driver has problems with quoted identifiers. Columns
@@ -70,7 +72,8 @@ trait OracleProfile extends JdbcProfile {
       JdbcCapabilities.distinguishesIntTypes -
       JdbcCapabilities.supportsByte -
       JdbcCapabilities.returnMultipleInsertKey -
-      JdbcCapabilities.insertMultipleRowsWithSingleStatement
+      JdbcCapabilities.insertMultipleRowsWithSingleStatement -
+      JdbcCapabilities.forShare
 
   override protected lazy val useServerSideUpsert = true
   override protected lazy val useServerSideUpsertReturning = false
@@ -173,7 +176,9 @@ trait OracleProfile extends JdbcProfile {
     }
   }
 
-  class OracleTableDDLBuilder(table: Table[?]) extends TableDDLBuilder(table) {
+  class OracleTableDDLBuilder(table: Table[?])
+    extends TableDDLBuilder(table)
+      with TableDDLBuilder.UniqueIndexAsConstraint {
     override val createPhase1 = super.createPhase1 ++ createAutoIncSequences
     override val dropPhase2 = dropAutoIncSequences ++ super.dropPhase2
 
@@ -200,12 +205,12 @@ trait OracleProfile extends JdbcProfile {
     override def dropIfExistsPhase = {
       //http://stackoverflow.com/questions/1799128/oracle-if-table-exists
       Iterable(
-"""
+        """
 BEGIN
-"""+ dropPhase2.map{s =>
-"execute immediate '"+ s.replaceAll("'", """\\'""") + " ';"
-            }.mkString("\n") +
-"""
+""" + dropPhase2.map { s =>
+          "execute immediate '" + s.replaceAll("'", """\\'""") + " ';"
+        }.mkString("\n") +
+          """
 EXCEPTION
    WHEN OTHERS THEN
       IF SQLCODE = -942 THEN
@@ -236,21 +241,7 @@ END;
         case ForeignKeyAction.SetNull => sb append " on delete set null"
         case _ => // do nothing
       }
-      if(fk.onUpdate == ForeignKeyAction.Cascade) sb append " initially deferred"
-    }
-
-    override protected def createIndex(idx: Index) = {
-      if(idx.unique) {
-        /* Create a UNIQUE CONSTRAINT (with an automatically generated backing
-         * index) because Oracle does not allow a FOREIGN KEY CONSTRAINT to
-         * reference columns which have a UNIQUE INDEX but not a nominal UNIQUE
-         * CONSTRAINT. */
-        val sb = new StringBuilder append "ALTER TABLE " append quoteIdentifier(table.tableName) append " ADD "
-        sb append "CONSTRAINT " append quoteIdentifier(idx.name) append " UNIQUE("
-        addIndexColumnList(idx.on, sb, idx.table.tableName)
-        sb append ")"
-        sb.toString
-      } else super.createIndex(idx)
+      if (fk.onUpdate == ForeignKeyAction.Cascade) sb append " initially deferred"
     }
   }
 
@@ -303,16 +294,11 @@ END;
     }
   }
 
-  class OracleSequenceDDLBuilder[T](seq: Sequence[T]) extends SequenceDDLBuilder(seq) {
-    override def buildDDL: DDL = {
-      val b = new StringBuilder append "create sequence " append quoteIdentifier(seq.name)
-      seq._increment.foreach { b append " increment by " append _ }
-      seq._minValue.foreach { b append " minvalue " append _ }
-      seq._maxValue.foreach { b append " maxvalue " append _ }
-      seq._start.foreach { b append " start with " append _ }
-      if(seq._cycle) b append " cycle nocache"
-      DDL(b.toString, "drop sequence " + quoteIdentifier(seq.name))
-    }
+  class OracleSequenceDDLBuilder[T](seq: Sequence[T])
+    extends SequenceDDLBuilder.BuiltInSupport(seq)
+      with SequenceDDLBuilder.BuiltInSupport.IncrementBy
+      with SequenceDDLBuilder.BuiltInSupport.StartWith {
+    override protected def cycleClause = "cycle nocache"
   }
 
   class OracleJdbcTypes extends JdbcTypes {

@@ -2,6 +2,7 @@ import java.io.File
 import java.util.Date
 
 import Versioning.VersionInfo.VersionType
+import com.geirsson.CiReleasePlugin
 import com.github.sbt.git.DefaultReadableGit
 import coursier.version.Version
 import sbt.Keys.version
@@ -13,7 +14,7 @@ import sbtversionpolicy.SbtVersionPolicyPlugin.autoImport.{Compatibility, versio
 
 object Versioning extends AutoPlugin {
   val BumpMinor = Compatibility.BinaryAndSourceCompatible
-  val BumpMajor = Compatibility.BinaryCompatible
+  val BumpMajor = Compatibility.None
   val BumpEpoch = Compatibility.None
 
   def currentRef(dir: File): String =
@@ -98,6 +99,7 @@ object Versioning extends AutoPlugin {
       .map(VersionInfo(compat, _).shortVersionString)
 
   override def trigger = allRequirements
+  override def requires = CiReleasePlugin
 
   override def projectSettings =
     List(

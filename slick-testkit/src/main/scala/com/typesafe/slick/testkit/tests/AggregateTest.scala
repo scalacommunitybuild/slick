@@ -25,6 +25,16 @@ class AggregateTest extends AsyncTest[RelationalTestDB] {
       q2_0._1.shaped.result
   }
 
+  private def roundAvg(avgResult: BigDecimal) =
+    tdb.confName match {
+      case "db2" | "derbydisk" | "derbymem" | "hsqldbdisk" | "hsqldbmem" | "sqlserver-sqljdbc" =>
+        avgResult.setScale(0, BigDecimal.RoundingMode.DOWN).toDouble
+      case "mysql" =>
+        avgResult.setScale(4, BigDecimal.RoundingMode.HALF_UP).toDouble
+      case _ =>
+        avgResult.toDouble
+    }
+
   def testGroupBy = {
     class T(tag: Tag) extends Table[(Int, Option[Int])](tag, "t3") {
       def a = column[Int]("a")
@@ -99,20 +109,34 @@ class AggregateTest extends AsyncTest[RelationalTestDB] {
     }.flatMap { _ =>
       db.run(us += 4)
     }.flatMap { _ =>
-      val q6 = ((for {
-        (u, t) <- us joinLeft ts on (_.id === _.a)
-      } yield (u, t)).groupBy(_._1.id).map {
-        case (id, q) => (id, q.length, q.map(_._1).length, q.map(_._2).length, q.map(_._2.map(_.a)).length, q.map(_._2.map(_.a)).countDefined)
-      }).to[Set]
-      db.run(mark("q6", q6.result)).map(_ shouldBe Set((1, 3, 3, 3, 3, 3), (2, 3, 3, 3, 3, 3), (3, 2, 2, 2, 2, 2), (4, 1, 1, 1, 1, 0)))
+      val q6 =
+        (for {(u, t) <- us joinLeft ts on (_.id === _.a)} yield (u, t))
+          .groupBy(_._1.id)
+          .map { case (id, q) =>
+            (
+              id,
+              q.length,
+              q.map(_._1).length,
+              q.map(_._2).length,
+              q.map(_._2.map(_.a)).length,
+              q.map(_._2.map(_.a)).countDefined
+            )
+          }
+          .to[Set]
+      db.run(mark("q6", q6.result))
+        .map(_.shouldBe(Set((1, 3, 3, 3, 3, 3), (2, 3, 3, 3, 3, 3), (3, 2, 2, 2, 2, 2), (4, 1, 1, 1, 1, 0))))
     }.flatMap { _ =>
-      val q7 = ts.groupBy(_.a).map { case (a, ts) =>
-        (a, ts.map(_.b).sum, ts.map(_.b).min, ts.map(_.b).max, ts.map(_.b).avg)
-      }.to[Set]
-      db.run(mark("q7", q7.result)).map(_ shouldBe Set(
-        (1, Some(6), Some(1), Some(3), Some(2)),
-        (2, Some(8), Some(1), Some(5), Some(2)),
-        (3, Some(10), Some(1), Some(9), Some(5))))
+      val q7 =
+        ts
+          .groupBy(_.a)
+          .map { case (a, ts) => (a, ts.map(_.b).sum, ts.map(_.b).min, ts.map(_.b).max, ts.map(_.b).avg) }
+          .to[Set]
+      db.run(mark("q7", q7.result)).map { (result: Set[(Int, Option[Int], Option[Int], Option[Int], Option[Double])]) =>
+        result.shouldBe(Set(
+          (1, Some(6), Some(1), Some(3), Some(2.0)),
+          (2, Some(8), Some(1), Some(5), Some(roundAvg(8.0 / 3.0))),
+          (3, Some(10), Some(1), Some(9), Some(5.0))))
+      }
     }.flatMap { _ =>
       val q8 = us.map( _ => "test").groupBy(x => x).map(_._2.max)
       val q8a = us.map(_.id.asColumnOf[String] ++ "test").groupBy(x => x).map(_._2.max)
@@ -438,7 +462,7 @@ class AggregateTest extends AsyncTest[RelationalTestDB] {
       mark("q5c", q5c.result).map(_.sortBy(identity) should (r => r == Seq((1, "a"), (3, "c")) || r == Seq((2, "a"), (3, "c")))),
       mark("q6", q6.result).map(_ shouldBe 2),
       mark("q7", q7.result).map(_.sortBy(identity) shouldBe Seq(("a", "a"), ("a", "b"), ("c", "b"))),
-      
+
       bs.schema.create,
       bs ++= datab,
       mark("qb1a", qb1a.result).map(_.sortBy(identity) shouldBe Seq("a", "c")),
@@ -472,4 +496,31 @@ class AggregateTest extends AsyncTest[RelationalTestDB] {
       mark("q0", q.result).map(_ shouldBe Seq(1 -> Some(32), 3 -> Some(33))),
     )
   }
+
+  def testDistinctManyColumns = {
+    case class AA(from: String, to: String, data: Int)
+    case class T(table: String)(tag: Tag) extends Table[AA](tag, table) {
+      def from = column[String]("from")
+      def to = column[String]("to")
+      def data = column[Int]("data")
+      def * = (from, to, data).mapTo[AA]
+    }
+    val ts = TableQuery(T("t1"))
+    val q2 = ts.distinctOn(t => (t.to, t.from)).sortBy(t => (t.to, t.from, t.data))
+    val values = Seq(
+      AA("from1", "to2", 1),
+      AA("from1", "to1", 1),
+      AA("from1", "to2", 11),
+    )
+    DBIO.seq(
+      ts.schema.createIfNotExists,
+      ts ++= values,
+      q2.result.map(_ shouldBe Vector(
+        AA("from1", "to1", 1),
+        AA("from1", "to2", 1),
+      )),
+//      DBIO.failed(new Exception)
+    )
+  }
+
 }

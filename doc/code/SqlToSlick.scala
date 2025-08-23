@@ -224,7 +224,7 @@ object SqlToSlick extends App {
             select ADDRESS_ID, AVG(AGE)
             from PERSON
             group by ADDRESS_ID
-          """.as[(Int,Option[Int])]
+          """.as[(Int,Option[Double])]
           //#sqlQueryGroupBy
         val slick =
           //#slickQueryGroupBy
@@ -235,7 +235,7 @@ object SqlToSlick extends App {
         val (sqlRes, slickRes) = Await.result(db.run(sql zip slick), Duration.Inf)
         assert(sqlRes == slickRes)
         assert(sqlRes.size > 0)
-        assert(sqlRes.exists(_._2 == Some(1000)))
+        assert(sqlRes.exists(_._2 == Some(1000.0)))
       };{
         val sql =
           //#sqlQueryHaving
@@ -250,7 +250,7 @@ object SqlToSlick extends App {
           //#slickQueryHaving
           people.groupBy(p => p.addressId)
                  .map{ case (addressId, group) => (addressId, group.map(_.age).avg) }
-                 .filter{ case (addressId, avgAge) => avgAge > 50 }
+                 .filter{ case (addressId, avgAge) => avgAge > 50.0 }
                  .map(_._1)
                  .result
           //#slickQueryHaving

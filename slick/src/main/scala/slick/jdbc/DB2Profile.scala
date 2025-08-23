@@ -11,7 +11,6 @@ import slick.basic.Capability
 import slick.compiler.{CompilerState, Phase, RewriteBooleans}
 import slick.dbio.*
 import slick.jdbc.meta.MTable
-import slick.lifted.*
 import slick.relational.RelationalCapabilities
 import slick.util.QueryInterpolator.queryInterpolator
 
@@ -34,6 +33,8 @@ import slick.util.QueryInterpolator.queryInterpolator
   *     up in the JDBC meta data, thus the original type is lost.</li>
   *   <li>[[slick.jdbc.JdbcCapabilities.supportsByte]]:
   *     DB2 does not have a BYTE type.</li>
+  *   <li>[[slick.jdbc.JdbcCapabilities.forShare]]:
+  *     DB2 does not support SELECT ... FOR SHARE.</li>
   * </ul>
   *
   * Note: The DB2 JDBC driver has problems with quoted identifiers. Columns
@@ -49,7 +50,8 @@ trait DB2Profile extends JdbcProfile with JdbcActionComponent.MultipleRowsPerSta
       RelationalCapabilities.reverse -
       JdbcCapabilities.insertOrUpdate -
       JdbcCapabilities.supportsByte -
-      JdbcCapabilities.booleanMetaData
+      JdbcCapabilities.booleanMetaData -
+      JdbcCapabilities.forShare
 
   override protected lazy val useServerSideUpsert = true
   override protected lazy val useServerSideUpsertReturning = false
@@ -118,28 +120,17 @@ trait DB2Profile extends JdbcProfile with JdbcActionComponent.MultipleRowsPerSta
       if(o.direction.desc) b += " desc"
     }
 
-    override protected def buildForUpdateClause(forUpdate: Boolean) = {
-      super.buildForUpdateClause(forUpdate)
-      if(forUpdate) {
+    override protected def buildLockingClause(strength: Option[LockStrength]): Unit = {
+      super.buildLockingClause(strength)
+      if (strength.isDefined) {
         b" with RS "
       }
     }
   }
 
-  class DB2TableDDLBuilder(table: Table[?]) extends TableDDLBuilder(table) {
-    override protected def createIndex(idx: Index) = {
-      if(idx.unique) {
-        /* Create a UNIQUE CONSTRAINT (with an automatically generated backing
-         * index) because DB2 does not allow a FOREIGN KEY CONSTRAINT to
-         * reference columns which have a UNIQUE INDEX but not a nominal UNIQUE
-         * CONSTRAINT. */
-        val sb = new StringBuilder append "ALTER TABLE " append quoteIdentifier(table.tableName) append " ADD "
-        sb append "CONSTRAINT " append quoteIdentifier(idx.name) append " UNIQUE("
-        addIndexColumnList(idx.on, sb, idx.table.tableName)
-        sb append ")"
-        sb.toString
-      } else super.createIndex(idx)
-    }
+  class DB2TableDDLBuilder(table: Table[?])
+    extends TableDDLBuilder(table)
+      with TableDDLBuilder.UniqueIndexAsConstraint {
 
     //For compatibility with all versions of DB2
     //http://stackoverflow.com/questions/3006999/sql-query-to-truncate-table-in-ibm-db2
@@ -182,17 +173,11 @@ trait DB2Profile extends JdbcProfile with JdbcActionComponent.MultipleRowsPerSta
     }
   }
 
-  class DB2SequenceDDLBuilder(seq: Sequence[?]) extends SequenceDDLBuilder(seq) {
-    override def buildDDL: DDL = {
-      val b = new StringBuilder append "create sequence " append quoteIdentifier(seq.name)
-      b append " as " append jdbcTypeFor(seq.tpe).sqlTypeName(None)
-      seq._start.foreach { b append " start with " append _ }
-      seq._increment.foreach { b append " increment by " append _ }
-      seq._minValue.foreach { b append " minvalue " append _ }
-      seq._maxValue.foreach { b append " maxvalue " append _ }
-      if(seq._cycle) b append " cycle"
-      DDL(b.toString, "drop sequence " + quoteIdentifier(seq.name))
-    }
+  class DB2SequenceDDLBuilder(seq: Sequence[?])
+    extends SequenceDDLBuilder.BuiltInSupport(seq)
+      with SequenceDDLBuilder.BuiltInSupport.IncrementBy
+      with SequenceDDLBuilder.BuiltInSupport.StartWith {
+    override protected def asClause = s" as ${jdbcTypeFor(seq.tpe).sqlTypeName(None)}"
   }
 
   class DB2JdbcTypes extends JdbcTypes {

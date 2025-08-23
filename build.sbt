@@ -24,7 +24,6 @@ inThisBuild(
   Seq(
     organizationName := "Typesafe",
     organization := "com.typesafe.slick",
-    resolvers ++= Resolver.sonatypeOssRepos("snapshots"),
     homepage := Some(url("https://scala-slick.org")),
     startYear := Some(2008),
     licenses += ("Two-clause BSD-style license", url("https://github.com/slick/slick/blob/main/LICENSE.txt")),
@@ -95,14 +94,18 @@ def slickGeneralSettings =
       _.withConfigurations(Vector(Compile, Runtime, Optional))
     },
     sonatypeProfileName := "com.typesafe.slick",
-    Compile / doc / scalacOptions ++= Seq(
-      "-doc-title", name.value,
-      "-doc-version", version.value,
-      "-doc-footer", "Slick is developed by Typesafe and EPFL Lausanne.",
-      "-implicits",
-      "-diagrams", // requires graphviz
-      "-groups"
-    ),
+    Compile / doc / scalacOptions ++= {
+      val baseOptions = Seq(
+        "-doc-title", name.value,
+        "-doc-version", version.value,
+        "-doc-footer", "Slick is developed by Typesafe and EPFL Lausanne.",
+        "-implicits",
+        "-groups"
+      )
+      // Skip diagrams to avoid graphviz dependency
+      if (sys.env.get("SLICK_SKIP_DIAGRAMS").contains("true")) baseOptions
+      else baseOptions :+ "-diagrams" // requires graphviz
+    },
     logBuffered := false
   ) ++ slickScalacOptions
 

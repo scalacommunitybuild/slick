@@ -1,4 +1,3 @@
-
 package slick.jdbc
 
 import java.sql.{PreparedStatement, ResultSet, Types}
@@ -15,7 +14,6 @@ import slick.basic.Capability
 import slick.compiler.{CompilerState, Phase}
 import slick.dbio.*
 import slick.jdbc.meta.MTable
-import slick.lifted.*
 import slick.relational.RelationalProfile
 import slick.sql.SqlCapabilities
 import slick.util.ConstArray
@@ -36,6 +34,8 @@ import slick.util.QueryInterpolator.queryInterpolator
   *     InsertOrUpdate operations are emulated on the client side if generated
   *     keys should be returned. Otherwise the operation is performed
   *     natively on the server side.</li>
+  *   <li>[[slick.jdbc.JdbcCapabilities.forShare]]:
+  *     HSQLDB does not support SELECT ... FOR SHARE.</li>
   * </ul>
   */
 trait HsqldbProfile extends JdbcProfile with JdbcActionComponent.MultipleRowsPerStatementSupport {
@@ -43,7 +43,8 @@ trait HsqldbProfile extends JdbcProfile with JdbcActionComponent.MultipleRowsPer
   override protected def computeCapabilities: Set[Capability] =
     super.computeCapabilities -
       SqlCapabilities.sequenceCurr -
-      JdbcCapabilities.insertOrUpdate
+      JdbcCapabilities.insertOrUpdate -
+      JdbcCapabilities.forShare
 
   class HsqldbModelBuilder(mTables: Seq[MTable], ignoreInvalidDefaults: Boolean)(implicit ec: ExecutionContext)
     extends JdbcModelBuilder(mTables, ignoreInvalidDefaults) {
@@ -301,38 +302,16 @@ trait HsqldbProfile extends JdbcProfile with JdbcActionComponent.MultipleRowsPer
     }
   }
 
-  class HsqldbTableDDLBuilder(table: Table[?]) extends TableDDLBuilder(table) {
-    override protected def createIndex(idx: Index) = {
-      if(idx.unique) {
-        /* Create a UNIQUE CONSTRAINT (with an automatically generated backing
-         * index) because Hsqldb does not allow a FOREIGN KEY CONSTRAINT to
-         * reference columns which have a UNIQUE INDEX but not a nominal UNIQUE
-         * CONSTRAINT. */
-        val sb = new StringBuilder append "ALTER TABLE " append quoteIdentifier(table.tableName) append " ADD "
-        sb append "CONSTRAINT " append quoteIdentifier(idx.name) append " UNIQUE("
-        addIndexColumnList(idx.on, sb, idx.table.tableName)
-        sb append ")"
-        sb.toString
-      } else super.createIndex(idx)
-    }
-  }
+  class HsqldbTableDDLBuilder(table: Table[?])
+    extends TableDDLBuilder(table)
+      with TableDDLBuilder.UniqueIndexAsConstraint
 
-  class HsqldbSequenceDDLBuilder[T](seq: Sequence[T]) extends SequenceDDLBuilder(seq) {
-    override def buildDDL: DDL = {
-      import seq.integral.*
-      val increment = seq._increment.getOrElse(one)
-      val desc = increment < zero
-      val start = seq._start.getOrElse(if(desc) -1 else 1)
-      val b = new StringBuilder append "CREATE SEQUENCE " append quoteIdentifier(seq.name)
-      seq._increment.foreach { b append " INCREMENT BY " append _ }
-      seq._minValue.foreach { b append " MINVALUE " append _ }
-      seq._maxValue.foreach { b append " MAXVALUE " append _ }
-      /* The START value in Hsqldb defaults to 0 instead of the more
-       * conventional 1/-1 so we rewrite it to make 1/-1 the default. */
-      if(start != 0) b append " START WITH " append start
-      if(seq._cycle) b append " CYCLE"
-      DDL(b.toString, "DROP SEQUENCE " + quoteIdentifier(seq.name))
-    }
+  class HsqldbSequenceDDLBuilder[T](seq: Sequence[T])
+    extends SequenceDDLBuilder.BuiltInSupport.OverrideActualStart(seq)
+      with SequenceDDLBuilder.BuiltInSupport.IncrementBy
+      with SequenceDDLBuilder.BuiltInSupport.StartWith {
+    override protected def startClause(actualStart: Any): String =
+      if (actualStart == 0) "" else super.startClause(actualStart)
   }
 }
 
